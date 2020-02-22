@@ -21,7 +21,7 @@
 # *
 
 cmake_minimum_required(VERSION 2.8)
-project(djiosdk-mission-sample)
+project(dphm-mission-sample)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -pthread -g -O0")
 
@@ -44,12 +44,3 @@ add_executable(${PROJECT_NAME}
     main.cpp
     mission_sample.cpp)
 target_link_libraries(${PROJECT_NAME} djiosdk-core)
-
-if(WAYPT2_CORE)
-  add_executable(djiosdk-waypoint-v2-sample
-      ${CMAKE_CURRENT_SOURCE_DIR}/../common/dji_linux_environment.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../common/dji_linux_helpers.cpp
-      waypoint_v2_main.cpp
-      waypoint_v2_sample.cpp)
-  target_link_libraries(djiosdk-waypoint-v2-sample djiosdk-core)
-endif()

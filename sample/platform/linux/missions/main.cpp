@@ -50,9 +50,6 @@ main(int argc, char** argv)
     return -1;
   }
 
-  // Obtain Control Authority
-  vehicle->obtainCtrlAuthority(functionTimeout);
-
   // Setup variables for use
   uint8_t wayptPolygonSides;
   int     hotptInitRadius;
@@ -63,23 +60,14 @@ main(int argc, char** argv)
     << "| Available commands:                                            |"
     << std::endl;
   std::cout
-    << "| [a] Waypoint Mission                                           |"
-    << std::endl;
-  std::cout
-    << "| [b] Hotpoint Mission                                           |"
+    << "| [a] DPHM Fake Mission                                          |"
     << std::endl;
   char inputChar;
   std::cin >> inputChar;
   switch (inputChar)
   {
     case 'a':
-      // Waypoint call
-      wayptPolygonSides = 6;
-      runWaypointMission(vehicle, wayptPolygonSides, responseTimeout);
-      break;
-    case 'b':
-      hotptInitRadius = 10;
-      runHotpointMission(vehicle, hotptInitRadius, responseTimeout);
+      runDPHMMission(vehicle, responseTimeout);
       break;
     default:
       break;

@@ -43,31 +43,20 @@
 // Helpers
 #include <dji_linux_helpers.hpp>
 
-// Subscription not supported in Matrice 100
-bool setUpSubscription(DJI::OSDK::Vehicle* vehicle, int responseTimeout);
-bool teardownSubscription(DJI::OSDK::Vehicle* vehicle, const int pkgIndex,
-                          int responseTimeout);
-
-bool runWaypointMission(DJI::OSDK::Vehicle* vehicle, uint8_t numWaypoints,
-                        int responseTimeout);
+bool runDPHMMission(DJI::OSDK::Vehicle* vehicle, int responseTimeout);
 
 void setWaypointDefaults(DJI::OSDK::WayPointSettings* wp);
 void setWaypointInitDefaults(DJI::OSDK::WayPointInitSettings* fdata);
 
-std::vector<DJI::OSDK::WayPointSettings> createWaypoints(
-  DJI::OSDK::Vehicle* vehicle, int numWaypoints,
-  DJI::OSDK::float64_t distanceIncrement, DJI::OSDK::float32_t start_alt);
+std::vector<DJI::OSDK::WayPointSettings> createDPHMWaypoints(
+  DJI::OSDK::Vehicle* vehicle, DJI::OSDK::float32_t start_alt);
 
-std::vector<DJI::OSDK::WayPointSettings> generateWaypointsPolygon(
-  DJI::OSDK::WayPointSettings* start_data, DJI::OSDK::float64_t increment,
-  int num_wp);
+std::vector<DJI::OSDK::WayPointSettings> generateWaypointsFromFile(
+  DJI::OSDK::WayPointSettings* start_data);
 
 void uploadWaypoints(DJI::OSDK::Vehicle*                       vehicle,
                      std::vector<DJI::OSDK::WayPointSettings>& wp_list,
                      int                                       responseTimeout);
-
-bool runHotpointMission(DJI::OSDK::Vehicle* vehicle, int initialRadius,
-                        int responseTimeout);
 
 const int DEFAULT_PACKAGE_INDEX = 0;
 

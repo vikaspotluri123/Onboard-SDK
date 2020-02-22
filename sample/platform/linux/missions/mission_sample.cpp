@@ -30,93 +30,34 @@
  *
  */
 
+#include <fstream>
+#include <sstream>
 #include "mission_sample.hpp"
 
 using namespace DJI::OSDK;
 using namespace DJI::OSDK::Telemetry;
 
 bool
-setUpSubscription(DJI::OSDK::Vehicle* vehicle, int responseTimeout)
+runDPHMMission(Vehicle* vehicle, int responseTimeout)
 {
-  // Telemetry: Verify the subscription
-  ACK::ErrorCode subscribeStatus;
-
-  subscribeStatus = vehicle->subscribe->verify(responseTimeout);
-  if (ACK::getError(subscribeStatus) != ACK::SUCCESS)
-  {
-    ACK::getErrorCodeMessage(subscribeStatus, __func__);
-    return false;
-  }
-
-  // Telemetry: Subscribe to flight status and mode at freq 10 Hz
-  int       freq            = 10;
-  TopicName topicList10Hz[] = { TOPIC_GPS_FUSED };
-  int       numTopic        = sizeof(topicList10Hz) / sizeof(topicList10Hz[0]);
-  bool      enableTimestamp = false;
-
-  bool pkgStatus = vehicle->subscribe->initPackageFromTopicList(
-    DEFAULT_PACKAGE_INDEX, numTopic, topicList10Hz, enableTimestamp, freq);
-  if (!(pkgStatus))
-  {
-    return pkgStatus;
-  }
-
-  // Start listening to the telemetry data
-  subscribeStatus =
-    vehicle->subscribe->startPackage(DEFAULT_PACKAGE_INDEX, responseTimeout);
-  if (ACK::getError(subscribeStatus) != ACK::SUCCESS)
-  {
-    ACK::getErrorCodeMessage(subscribeStatus, __func__);
-    // Cleanup
-    ACK::ErrorCode ack =
-      vehicle->subscribe->removePackage(DEFAULT_PACKAGE_INDEX, responseTimeout);
-    if (ACK::getError(ack))
-    {
-      std::cout << "Error unsubscribing; please restart the drone/FC to get "
-        "back to a clean state.\n";
-    }
-    return false;
-  }
-  return true;
-}
-
-bool
-teardownSubscription(DJI::OSDK::Vehicle* vehicle, const int pkgIndex,
-                     int responseTimeout)
-{
-  ACK::ErrorCode ack =
-    vehicle->subscribe->removePackage(pkgIndex, responseTimeout);
-  if (ACK::getError(ack))
-  {
-    std::cout << "Error unsubscribing; please restart the drone/FC to get back "
-      "to a clean state.\n";
-    return false;
-  }
-  return true;
-}
-
-bool
-runWaypointMission(Vehicle* vehicle, uint8_t numWaypoints, int responseTimeout)
-{
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
-  {
-    if (!setUpSubscription(vehicle, responseTimeout))
-    {
-      std::cout << "Failed to set up Subscription!" << std::endl;
-      return false;
-    }
-    sleep(1);
-  }
-
   // Waypoint Mission : Initialization
   WayPointInitSettings fdata;
   setWaypointInitDefaults(&fdata);
 
-  fdata.indexNumber =
-    numWaypoints + 1; // We add 1 to get the aircarft back to the start.
+  float32_t start_alt = 20;
 
-  float64_t increment = 0.000001;
-  float32_t start_alt = 10;
+  std::cout << "Initializing DPHM Mission..\n";
+
+  // Obtain Control Authority
+  ACK::ErrorCode ctrlAck = vehicle->obtainCtrlAuthority(responseTimeout);
+  if (ACK::getError(ctrlAck))
+  {
+    ACK::getErrorCodeMessage(ctrlAck, __func__);
+  }
+  else
+  {
+    std::cout << "Obtained drone control authority.\n";
+  }
 
   ACK::ErrorCode initAck = vehicle->missionManager->init(
     DJI_MISSION_TYPE::WAYPOINT, responseTimeout, &fdata);
@@ -126,35 +67,67 @@ runWaypointMission(Vehicle* vehicle, uint8_t numWaypoints, int responseTimeout)
   }
 
   vehicle->missionManager->printInfo();
-  std::cout << "Initializing Waypoint Mission..\n";
 
   // Waypoint Mission: Create Waypoints
-  std::vector<WayPointSettings> generatedWaypts =
-    createWaypoints(vehicle, numWaypoints, increment, start_alt);
   std::cout << "Creating Waypoints..\n";
+  std::vector<WayPointSettings> generatedWaypts =
+    createDPHMWaypoints(vehicle, start_alt);
 
   // Waypoint Mission: Upload the waypoints
-  uploadWaypoints(vehicle, generatedWaypts, responseTimeout);
   std::cout << "Uploading Waypoints..\n";
+  uploadWaypoints(vehicle, generatedWaypts, responseTimeout);
 
+
+  // Takeoff
+  ACK::ErrorCode takeoffAck = vehicle->control->takeoff(responseTimeout);
+  if (ACK::getError(takeoffAck))
+  {
+    ACK::getErrorCodeMessage(takeoffAck, __func__);
+
+    if(takeoffAck.info.cmd_set == OpenProtocolCMD::CMDSet::control
+       && takeoffAck.data == ErrorCode::CommonACK::START_MOTOR_FAIL_MOTOR_STARTED)
+    {
+      DSTATUS("Take off command sent failed. Please Land the drone and disarm the motors first.\n");
+    }
+
+    return false;
+  }
+  else
+  {
+    std::cout << "Took off. Waiting 15 seconds...\n";
+    sleep(15);
+  }
+
+
+  std::cout << "Starting DPHM Mission.\n";
   // Waypoint Mission: Start
   ACK::ErrorCode startAck =
     vehicle->missionManager->wpMission->start(responseTimeout);
   if (ACK::getError(startAck))
   {
-    ACK::getErrorCodeMessage(initAck, __func__);
+    ACK::getErrorCodeMessage(startAck, __func__);
   }
   else
   {
-    std::cout << "Starting Waypoint Mission.\n";
+    std::cout << "Started DPHM Mission.\n";
   }
+  sleep(2000);
 
-  // Cleanup before return. The mission isn't done yet, but it doesn't need any
-  // more input from our side.
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
+  // Stop
+  std::cout << "Stop" << std::endl;
+  ACK::ErrorCode stopAck =
+    vehicle->missionManager->wpMission->stop(responseTimeout);
+
+  std::cout << "Land" << std::endl;
+  ACK::ErrorCode landAck = vehicle->control->land(responseTimeout);
+  if (ACK::getError(landAck))
   {
-    return teardownSubscription(vehicle, DEFAULT_PACKAGE_INDEX,
-                                responseTimeout);
+    ACK::getErrorCodeMessage(landAck, __func__);
+  }
+  else
+  {
+    // No error. Wait for a few seconds to land
+    sleep(10);
   }
 
   return true;
@@ -181,6 +154,7 @@ setWaypointDefaults(WayPointSettings* wp)
 void
 setWaypointInitDefaults(WayPointInitSettings* fdata)
 {
+  fdata->indexNumber    = 20;
   fdata->maxVelocity    = 10;
   fdata->idleVelocity   = 5;
   fdata->finishAction   = 0;
@@ -189,81 +163,91 @@ setWaypointInitDefaults(WayPointInitSettings* fdata)
   fdata->traceMode      = 0;
   fdata->RCLostAction   = 1;
   fdata->gimbalPitch    = 0;
-  fdata->latitude       = 0;
-  fdata->longitude      = 0;
+  fdata->latitude       = 0.53436962199939;
+  fdata->longitude      = -1.6627376835400;
   fdata->altitude       = 0;
 }
 
 std::vector<DJI::OSDK::WayPointSettings>
-createWaypoints(DJI::OSDK::Vehicle* vehicle, int numWaypoints,
-                float64_t distanceIncrement, float32_t start_alt)
+createDPHMWaypoints(DJI::OSDK::Vehicle* vehicle, float32_t start_alt)
 {
   // Create Start Waypoint
   WayPointSettings start_wp;
   setWaypointDefaults(&start_wp);
 
-  // Global position retrieved via subscription
-  Telemetry::TypeMap<TOPIC_GPS_FUSED>::type subscribeGPosition;
+
   // Global position retrieved via broadcast
   Telemetry::GlobalPosition broadcastGPosition;
 
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
-  {
-    subscribeGPosition = vehicle->subscribe->getValue<TOPIC_GPS_FUSED>();
-    start_wp.latitude  = subscribeGPosition.latitude;
-    start_wp.longitude = subscribeGPosition.longitude;
-    start_wp.altitude  = start_alt;
-    printf("Waypoint created at (LLA): %f \t%f \t%f\n",
-           subscribeGPosition.latitude, subscribeGPosition.longitude,
-           start_alt);
-  }
-  else
-  {
-    broadcastGPosition = vehicle->broadcast->getGlobalPosition();
-    start_wp.latitude  = broadcastGPosition.latitude;
-    start_wp.longitude = broadcastGPosition.longitude;
-    start_wp.altitude  = start_alt;
-    printf("Waypoint created at (LLA): %f \t%f \t%f\n",
-           broadcastGPosition.latitude, broadcastGPosition.longitude,
-           start_alt);
-  }
+  broadcastGPosition = vehicle->broadcast->getGlobalPosition();
+  start_wp.latitude  = broadcastGPosition.latitude;
+  start_wp.longitude = broadcastGPosition.longitude;
+  start_wp.altitude  = start_alt;
+  /*printf("Waypoint created at (LLA): %f \t%f \t%f\n",
+          broadcastGPosition.latitude, broadcastGPosition.longitude,
+          start_alt);*/
 
   std::vector<DJI::OSDK::WayPointSettings> wpVector =
-    generateWaypointsPolygon(&start_wp, distanceIncrement, numWaypoints);
+    generateWaypointsFromFile(&start_wp);
   return wpVector;
 }
 
 std::vector<DJI::OSDK::WayPointSettings>
-generateWaypointsPolygon(WayPointSettings* start_data, float64_t increment,
-                         int num_wp)
+generateWaypointsFromFile(WayPointSettings* start_data)
 {
-
   // Let's create a vector to store our waypoints in.
   std::vector<DJI::OSDK::WayPointSettings> wp_list;
 
-  // Some calculation for the polygon
-  float64_t extAngle = 2 * M_PI / num_wp;
-
   // First waypoint
-  start_data->index = 0;
-  wp_list.push_back(*start_data);
+  start_data->index = (uint8_t) 0;
+  // wp_list.push_back(*start_data);
 
-  // Iterative algorithm
-  for (int i = 1; i < num_wp; i++)
-  {
-    WayPointSettings  wp;
-    WayPointSettings* prevWp = &wp_list[i - 1];
+  // Read in waypoints from file
+  std::ifstream inFile;
+  inFile.open("/home/test_points.txt"); // @todo: decide where the waypoints file will be located
+  // waypoints file: each line should be
+  //lat lon alt
+  std::string line;
+  uint8_t i = 0;
+
+  while(std::getline(inFile, line)) {
+    if(line == "") {
+      break;
+    }
+
+    std::istringstream ss(line);
+
+    std::string lat_str;
+    std::string lon_str;
+    std::string alt_str;
+
+    ss >> lat_str;
+    ss >> lon_str;
+    ss >> alt_str;
+
+    double latitude = std::stod(lat_str);
+    double longitude = std::stod(lon_str);
+    double altitude = std::stod(alt_str);
+    double pi = 3.14159265358979323846;
+
+    latitude = (latitude / 360) * 2 * pi;
+    longitude = (longitude / 360) * 2 * pi;
+
+    WayPointSettings wp;
     setWaypointDefaults(&wp);
     wp.index     = i;
-    wp.latitude  = (prevWp->latitude + (increment * cos(i * extAngle)));
-    wp.longitude = (prevWp->longitude + (increment * sin(i * extAngle)));
-    wp.altitude  = (prevWp->altitude + 1);
+    wp.latitude  = latitude;
+    wp.longitude = longitude;
+    wp.altitude  = altitude;
+    // wp.toString();
     wp_list.push_back(wp);
+
+    i++;
   }
 
   // Come back home
-  start_data->index = num_wp;
-  wp_list.push_back(*start_data);
+  //start_data->index = num_wp;
+  //wp_list.push_back(*start_data);
 
   return wp_list;
 }
@@ -284,139 +268,4 @@ uploadWaypoints(Vehicle*                                  vehicle,
 
     ACK::getErrorCodeMessage(wpDataACK.ack, __func__);
   }
-}
-
-bool
-runHotpointMission(Vehicle* vehicle, int initialRadius, int responseTimeout)
-{
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
-  {
-    if (!setUpSubscription(vehicle, responseTimeout))
-    {
-      std::cout << "Failed to set up Subscription!" << std::endl;
-      return false;
-    }
-    sleep(1);
-  }
-
-  // Global position retrieved via subscription
-  Telemetry::TypeMap<TOPIC_GPS_FUSED>::type subscribeGPosition;
-  // Global position retrieved via broadcast
-  Telemetry::GlobalPosition broadcastGPosition;
-
-  // Hotpoint Mission Initialize
-  vehicle->missionManager->init(DJI_MISSION_TYPE::HOTPOINT, responseTimeout,
-                                NULL);
-  vehicle->missionManager->printInfo();
-
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
-  {
-    subscribeGPosition = vehicle->subscribe->getValue<TOPIC_GPS_FUSED>();
-    vehicle->missionManager->hpMission->setHotPoint(
-      subscribeGPosition.longitude, subscribeGPosition.latitude, initialRadius);
-  }
-  else
-  {
-    broadcastGPosition = vehicle->broadcast->getGlobalPosition();
-    vehicle->missionManager->hpMission->setHotPoint(
-      broadcastGPosition.longitude, broadcastGPosition.latitude, initialRadius);
-  }
-
-  // Takeoff
-  ACK::ErrorCode takeoffAck = vehicle->control->takeoff(responseTimeout);
-  if (ACK::getError(takeoffAck))
-  {
-    ACK::getErrorCodeMessage(takeoffAck, __func__);
-
-    if(takeoffAck.info.cmd_set == OpenProtocolCMD::CMDSet::control
-       && takeoffAck.data == ErrorCode::CommonACK::START_MOTOR_FAIL_MOTOR_STARTED)
-    {
-      DSTATUS("Take off command sent failed. Please Land the drone and disarm the motors first.\n");
-    }
-
-    if (!vehicle->isM100() && !vehicle->isLegacyM600())
-    {
-      teardownSubscription(vehicle, DEFAULT_PACKAGE_INDEX, responseTimeout);
-    }
-    return false;
-  }
-  else
-  {
-    sleep(15);
-  }
-
-  // Start
-  std::cout << "Start with default rotation rate: 15 deg/s" << std::endl;
-  ACK::ErrorCode startAck =
-    vehicle->missionManager->hpMission->start(responseTimeout);
-  if (ACK::getError(startAck))
-  {
-    ACK::getErrorCodeMessage(startAck, __func__);
-    if (!vehicle->isM100() && !vehicle->isLegacyM600())
-    {
-      teardownSubscription(vehicle, DEFAULT_PACKAGE_INDEX, responseTimeout);
-    }
-    return false;
-  }
-  sleep(20);
-
-  // Pause
-  std::cout << "Pause for 5s" << std::endl;
-  ACK::ErrorCode pauseAck =
-    vehicle->missionManager->hpMission->pause(responseTimeout);
-  if (ACK::getError(pauseAck))
-  {
-    ACK::getErrorCodeMessage(pauseAck, __func__);
-  }
-  sleep(5);
-
-  // Resume
-  std::cout << "Resume" << std::endl;
-  ACK::ErrorCode resumeAck =
-    vehicle->missionManager->hpMission->resume(responseTimeout);
-  if (ACK::getError(resumeAck))
-  {
-    ACK::getErrorCodeMessage(resumeAck, __func__);
-  }
-  sleep(10);
-
-  // Update radius, no ACK
-  std::cout << "Update radius to 1.5x: new radius = " << 1.5 * initialRadius
-            << std::endl;
-  vehicle->missionManager->hpMission->updateRadius(1.5 * initialRadius);
-  sleep(10);
-
-  // Update velocity (yawRate), no ACK
-  std::cout << "Update hotpoint rotation rate: new rate = 5 deg/s" << std::endl;
-  HotpointMission::YawRate yawRateStruct;
-  yawRateStruct.clockwise = 1;
-  yawRateStruct.yawRate   = 5;
-  vehicle->missionManager->hpMission->updateYawRate(yawRateStruct);
-  sleep(10);
-
-  // Stop
-  std::cout << "Stop" << std::endl;
-  ACK::ErrorCode stopAck =
-    vehicle->missionManager->hpMission->stop(responseTimeout);
-
-  std::cout << "land" << std::endl;
-  ACK::ErrorCode landAck = vehicle->control->land(responseTimeout);
-  if (ACK::getError(landAck))
-  {
-    ACK::getErrorCodeMessage(landAck, __func__);
-  }
-  else
-  {
-    // No error. Wait for a few seconds to land
-    sleep(10);
-  }
-
-  // Clean up
-  ACK::getErrorCodeMessage(startAck, __func__);
-  if (!vehicle->isM100() && !vehicle->isLegacyM600())
-  {
-    teardownSubscription(vehicle, DEFAULT_PACKAGE_INDEX, responseTimeout);
-  }
-
-  return true;
 }
